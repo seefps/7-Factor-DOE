@@ -31,3 +31,4 @@ streamlit run app.py
 - The model includes false peaks to encourage systematic DOE testing.
 - The model returns identical results for the same seed.
 - The response surface plot shows the two significant factors (not revealed until Answer).
+https://7-factor-doe-colin.streamlit.app/
