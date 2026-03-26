@@ -1,2 +1,4 @@
 cd "c:\Users\seefp\DOE Simulator\doe_simulator_project"
 C:\Users\seefp\AppData\Local\Python\pythoncore-3.14-64\python.exe -m streamlit run app.py --server.port 8501
+cd "c:\Users\seefp\DOE Simulator\doe_simulator_project"
+C:\Users\seefp\AppData\Local\Python\pythoncore-3.14-64\python.exe -m streamlit run app.py --server.port 8501

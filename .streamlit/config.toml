@@ -1,0 +1,12 @@
+[client]
+showErrorDetails = false
+toolbarMode = "viewer"
+
+[logger]
+level = "info"
+
+[server]
+headless = true
+runOnSave = false
+port = 8501
+enableXsrfProtection = false

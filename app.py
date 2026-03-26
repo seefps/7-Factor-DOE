@@ -1,4 +1,6 @@
 """Streamlit interface for 7-factor DOE simulator."""
+from io import StringIO
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,7 +13,7 @@ def init_state() -> None:
     if "seed" not in st.session_state:
         st.session_state.seed = 12345678
     if "model_type" not in st.session_state:
-        st.session_state.model_type = "gaussian"
+        st.session_state.model_type = "regression"
     if "model" not in st.session_state:
         st.session_state.model = generate_seeded_model(st.session_state.seed, model_type=st.session_state.model_type)
     if "history" not in st.session_state:
@@ -30,7 +32,7 @@ def reset_history() -> None:
     )
 
 
-def reset_model(seed: int, model_type: str = "gaussian") -> None:
+def reset_model(seed: int, model_type: str = "regression") -> None:
     st.session_state.seed = seed
     st.session_state.model_type = model_type
     st.session_state.model = generate_seeded_model(seed, model_type=model_type)
@@ -96,8 +98,8 @@ def main() -> None:
 
         model_type = st.radio(
             "Model Type",
-            options=["gaussian", "polynomial"],
-            format_func=lambda x: "Gaussian Peaks" if x == "gaussian" else "Polynomial (Quadratic/Cubic)"
+            options=["gaussian", "regression"],
+            format_func=lambda x: "Gaussian Peaks" if x == "gaussian" else "Regression (Main + Interactions)"
         )
 
         if st.button("Apply Seed"):
@@ -134,9 +136,66 @@ def main() -> None:
     if st.button("Answer"):
         st.session_state.show_answer = True
 
+    st.subheader("Batch Response Calculator")
+    st.write(
+        "Paste a table with factor columns A-G (comma, tab, or space delimited). "
+        "Responses will be calculated using the current hidden model."
+    )
+    pasted_table = st.text_area(
+        "Paste factor table",
+        value="A,B,C,D,E,F,G\n0,0,0,0,0,0,0\n10,-5,0,0,0,0,0",
+        height=180,
+        key="pasted_factor_table",
+    )
+
+    if st.button("Compute Responses from Pasted Table"):
+        try:
+            batch_df = pd.read_csv(StringIO(pasted_table.strip()), sep=None, engine="python")
+            if batch_df.shape[1] == 1:
+                batch_df = pd.read_csv(
+                    StringIO(pasted_table.strip()),
+                    sep=r"[\s,;\t]+",
+                    engine="python",
+                )
+
+            expected_factors = ["A", "B", "C", "D", "E", "F", "G"]
+            upper_map = {col.upper(): col for col in batch_df.columns}
+
+            normalized = pd.DataFrame()
+            for factor in expected_factors:
+                if factor in upper_map:
+                    normalized[factor] = pd.to_numeric(
+                        batch_df[upper_map[factor]], errors="coerce"
+                    ).fillna(0.0)
+                else:
+                    normalized[factor] = 0.0
+
+            normalized["Response"] = normalized.apply(
+                lambda row: round(
+                    calculate_response(
+                        {f: float(row[f]) for f in expected_factors},
+                        st.session_state.model,
+                    ),
+                    6,
+                ),
+                axis=1,
+            )
+
+            st.success(f"Computed responses for {len(normalized)} rows.")
+            st.dataframe(normalized, use_container_width=True)
+            st.download_button(
+                label="Download Batch Results CSV",
+                data=normalized.to_csv(index=False),
+                file_name="batch_responses.csv",
+                mime="text/csv",
+            )
+        except Exception as exc:
+            st.error(f"Could not parse table. Check delimiters/header format. Error: {exc}")
+
+
     st.subheader("Effects Reference")
     st.write(
-        "Model includes linear terms for all factors, quadratic and cubic terms for significant factors, and interactions."
+        "Model includes seeded significant main effects for 2 factors plus first-order and second-order interactions."
     )
 
     st.subheader("Trial History")
@@ -152,6 +211,7 @@ def main() -> None:
                 factor_values,
             )
             st.plotly_chart(fig, use_container_width=True)
+
 
     st.subheader("Peer Reproducibility")
     st.write(

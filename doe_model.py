@@ -7,7 +7,7 @@ import numpy as np
 @dataclass
 class DOEModel:
     seed: int
-    model_type: str  # "gaussian" or "polynomial"
+    model_type: str  # "gaussian" or "regression"
     intercept: float
     # Linear coefficients for all factors (adds noise)
     b_a: float
@@ -50,13 +50,13 @@ class DOEModel:
     noise_std: float
 
 
-def generate_seeded_model(seed: int = 12345678, noise_std: float = 0.0, model_type: str = "gaussian") -> DOEModel:
+def generate_seeded_model(seed: int = 12345678, noise_std: float = 0.0, model_type: str = "regression") -> DOEModel:
     """Generate deterministic model based on 8-digit seed.
     
     Args:
         seed: 8-digit seed for reproducibility
         noise_std: Standard deviation of noise
-        model_type: Either "gaussian" (Gaussian peaks) or "polynomial" (quadratic/cubic)
+        model_type: Either "gaussian" (Gaussian peaks) or "regression" (RSM-like regression)
     """
     normalized_seed = int(seed) % 100000000
     rng = np.random.default_rng(normalized_seed)
@@ -73,20 +73,22 @@ def generate_seeded_model(seed: int = 12345678, noise_std: float = 0.0, model_ty
     linear_coeffs = {}
     for f in factors:
         if f in sig_factors:
-            linear_coeffs[f] = rng.uniform(0.01, 0.1) * (1 if rng.random() > 0.5 else -1)
+            linear_coeffs[f] = rng.uniform(1, 5) * (1 if rng.random() > 0.5 else -1)
         else:
             linear_coeffs[f] = rng.uniform(0.001, 0.05) * (1 if rng.random() > 0.5 else -1)
 
-    if model_type == "gaussian":
+    normalized_model_type = "regression" if model_type == "polynomial" else model_type
+
+    if normalized_model_type == "gaussian":
         # Generate two Gaussian peaks within bounds [-50, 50]
         peak1_center_x = rng.uniform(-40, 40)
         peak1_center_y = rng.uniform(-40, 40)
-        peak1_amplitude = rng.uniform(5, 15)
+        peak1_amplitude = rng.uniform(200, 250)
         peak1_variance = rng.uniform(10, 30)
 
         peak2_center_x = rng.uniform(-40, 40)
         peak2_center_y = rng.uniform(-40, 40)
-        peak2_amplitude = rng.uniform(2, 8)
+        peak2_amplitude = rng.uniform(50, 150)
         peak2_variance = rng.uniform(10, 30)
 
         # Polynomial coefficients set to 0 for Gaussian model
@@ -96,19 +98,20 @@ def generate_seeded_model(seed: int = 12345678, noise_std: float = 0.0, model_ty
         b_aab = 0.0
         b_abb = 0.0
 
-    else:  # polynomial
-        # Generate polynomial coefficients
+    else:  # regression
+        # Generate regression coefficients.
+        # Two seeded factors have strong main effects and interaction structure.
         quad_coeffs = {f: 0.0 for f in factors}
         for f in sig_factors:
-            quad_coeffs[f] = -rng.uniform(0.005, 0.02)
+            quad_coeffs[f] = rng.uniform(0.08, 0.18) * (1 if rng.random() > 0.9 else -1)
 
         cubic_coeffs = {f: 0.0 for f in factors}
-        for f in sig_factors:
-            cubic_coeffs[f] = rng.uniform(0.0001, 0.001) * (1 if rng.random() > 0.5 else -1)
+        # Keep pure cubic terms disabled for regression mode.
 
-        b_ab = rng.uniform(0.01, 0.05) * (1 if rng.random() > 0.5 else -1)
-        b_aab = rng.uniform(0.0001, 0.001) * (1 if rng.random() > 0.5 else -1)
-        b_abb = rng.uniform(0.0001, 0.001) * (1 if rng.random() > 0.5 else -1)
+        # First-order and second-order interaction terms for the two significant factors.
+        b_ab = rng.uniform(0.2, 2) * (1 if rng.random() > 0.5 else -1)
+        b_aab = rng.uniform(0.0005, 0.005) * (1 if rng.random() > 0.5 else -1)
+        b_abb = rng.uniform(0.0005, 0.005) * (1 if rng.random() > 0.5 else -1)
 
         # Gaussian coefficients set to 0 for polynomial model
         peak1_center_x = 0.0
@@ -122,7 +125,7 @@ def generate_seeded_model(seed: int = 12345678, noise_std: float = 0.0, model_ty
 
     return DOEModel(
         seed=normalized_seed,
-        model_type=model_type,
+        model_type=normalized_model_type,
         intercept=intercept,
         b_a=linear_coeffs['A'],
         b_b=linear_coeffs['B'],
@@ -162,7 +165,7 @@ def generate_seeded_model(seed: int = 12345678, noise_std: float = 0.0, model_ty
 
 
 def calculate_response(factors: Dict[str, float], model: DOEModel) -> float:
-    """Compute response using either Gaussian peaks or polynomial model."""
+    """Compute response using either Gaussian peaks or regression model."""
     a = float(factors.get("A", 0.0))
     b = float(factors.get("B", 0.0))
     c = float(factors.get("C", 0.0))
@@ -191,16 +194,16 @@ def calculate_response(factors: Dict[str, float], model: DOEModel) -> float:
         # Gaussian peaks for significant factors
         dist1_sq = ((sig1_val - model.peak1_center_x)**2 + 
                     (sig2_val - model.peak1_center_y)**2)
-        peak1 = model.peak1_amplitude * np.exp(-model.peak1_variance * dist1_sq / 2500)
+        peak1 = model.peak1_amplitude * np.exp(-model.peak1_variance * dist1_sq / 8000)
 
         dist2_sq = ((sig1_val - model.peak2_center_x)**2 + 
                     (sig2_val - model.peak2_center_y)**2)
-        peak2 = model.peak2_amplitude * np.exp(-model.peak2_variance * dist2_sq / 2500)
+        peak2 = model.peak2_amplitude * np.exp(-model.peak2_variance * dist2_sq / 8000)
 
         response += peak1 + peak2
 
-    else:  # polynomial
-        # Polynomial terms for all factors
+    else:  # regression
+        # Regression-style second-order model with interactions.
         response += (
             model.b_aa * (a ** 2)
             + model.b_bb * (b ** 2)
@@ -209,13 +212,6 @@ def calculate_response(factors: Dict[str, float], model: DOEModel) -> float:
             + model.b_ee * (e ** 2)
             + model.b_ff * (f ** 2)
             + model.b_gg * (g ** 2)
-            + model.b_aaa * (a ** 3)
-            + model.b_bbb * (b ** 3)
-            + model.b_ccc * (c ** 3)
-            + model.b_ddd * (d ** 3)
-            + model.b_eee * (e ** 3)
-            + model.b_fff * (f ** 3)
-            + model.b_ggg * (g ** 3)
             + model.b_ab * (sig1_val * sig2_val)
             + model.b_aab * (sig1_val ** 2 * sig2_val)
             + model.b_abb * (sig1_val * sig2_val ** 2)
@@ -241,28 +237,22 @@ def model_equation(model: DOEModel) -> str:
     
     if model.model_type == "gaussian":
         # Gaussian peaks
-        terms.append(f"+ {model.peak1_amplitude:.2f}*exp(-{model.peak1_variance:.2f}*((({sig1}-{model.peak1_center_x:.1f})^2 + ({sig2}-{model.peak1_center_y:.1f})^2)/2500))")
-        terms.append(f"+ {model.peak2_amplitude:.2f}*exp(-{model.peak2_variance:.2f}*((({sig1}-{model.peak2_center_x:.1f})^2 + ({sig2}-{model.peak2_center_y:.1f})^2)/2500))")
+        terms.append(f"+ {model.peak1_amplitude:.2f}*exp(-{model.peak1_variance:.2f}*((({sig1}-{model.peak1_center_x:.1f})^2 + ({sig2}-{model.peak1_center_y:.1f})^2)/8000))")
+        terms.append(f"+ {model.peak2_amplitude:.2f}*exp(-{model.peak2_variance:.2f}*((({sig1}-{model.peak2_center_x:.1f})^2 + ({sig2}-{model.peak2_center_y:.1f})^2)/8000))")
         return "Y = " + " ".join(terms)
     
-    else:  # polynomial
-        # Quadratic terms
+    else:  # regression
+        # Main second-order terms
         for f in factors:
             coef = getattr(model, f'b_{f.lower()}{f.lower()}')
             if abs(coef) > 0.0001:
                 terms.append(f"{coef:.5f}*{f}^2")
-        
-        # Cubic terms
-        for f in factors:
-            coef = getattr(model, f'b_{f.lower()}{f.lower()}{f.lower()}')
-            if abs(coef) > 0.00001:
-                terms.append(f"{coef:.5f}*{f}^3")
-        
-        # Interaction
+
+        # First-order interaction
         if abs(model.b_ab) > 0.0001:
             terms.append(f"{model.b_ab:.5f}*{sig1}*{sig2}")
-        
-        # Cross-quadratic
+
+        # Second-order interactions
         if abs(model.b_aab) > 0.00001:
             terms.append(f"{model.b_aab:.5f}*{sig1}^2*{sig2}")
         if abs(model.b_abb) > 0.00001:
