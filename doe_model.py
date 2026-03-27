@@ -67,15 +67,17 @@ def generate_seeded_model(seed: int = 12345678, noise_std: float = 0.0, model_ty
     sig_indices = rng.choice(7, 2, replace=False)
     sig_factors = tuple(sorted(factors[i] for i in sig_indices))
 
-    intercept = rng.uniform(0, 5)
+    intercept = rng.uniform(1000, 2000)
 
-    # Linear coefficients: significant have small, others tiny (just noise)
+    # Linear coefficients: two significant factors are dominant, others are tiny noise.
     linear_coeffs = {}
     for f in factors:
-        if f in sig_factors:
-            linear_coeffs[f] = rng.uniform(1, 5) * (1 if rng.random() > 0.5 else -1)
-        else:
-            linear_coeffs[f] = rng.uniform(0.001, 0.05) * (1 if rng.random() > 0.5 else -1)
+        linear_coeffs[f] = rng.uniform(0, .5) * (1 if rng.random() > 0.5 else -1)
+
+    sig1, sig2 = sig_factors
+    # Match the style of: Y = 101 - 22D + 12F - 0.05D^2 - 0.04F^2 - 0.02DF
+    linear_coeffs[sig1] = rng.uniform(50, 500) * (1 if rng.random() > 0.5 else -1)
+    linear_coeffs[sig2] = rng.uniform(50, 500) * (1 if rng.random() > 0.5 else -1)
 
     normalized_model_type = "regression" if model_type == "polynomial" else model_type
 
@@ -99,19 +101,19 @@ def generate_seeded_model(seed: int = 12345678, noise_std: float = 0.0, model_ty
         b_abb = 0.0
 
     else:  # regression
-        # Generate regression coefficients.
-        # Two seeded factors have strong main effects and interaction structure.
+        # Generate a two-factor quadratic regression surface with one interaction term.
         quad_coeffs = {f: 0.0 for f in factors}
-        for f in sig_factors:
-            quad_coeffs[f] = rng.uniform(0.08, 0.18) * (1 if rng.random() > 0.9 else -1)
+        quad_coeffs[sig1] = rng.uniform(5, 25)
+        quad_coeffs[sig2] = rng.uniform(5, 25)
 
         cubic_coeffs = {f: 0.0 for f in factors}
         # Keep pure cubic terms disabled for regression mode.
 
-        # First-order and second-order interaction terms for the two significant factors.
-        b_ab = rng.uniform(0.2, 2) * (1 if rng.random() > 0.5 else -1)
-        b_aab = rng.uniform(0.0005, 0.005) * (1 if rng.random() > 0.5 else -1)
-        b_abb = rng.uniform(0.0005, 0.005) * (1 if rng.random() > 0.5 else -1)
+        # Single first-order interaction term between the significant factors.
+        b_ab = rng.uniform(5, 25)
+        # Disable higher-order interactions for regression mode.
+        b_aab = 0.0
+        b_abb = 0.0
 
         # Gaussian coefficients set to 0 for polynomial model
         peak1_center_x = 0.0
@@ -203,18 +205,11 @@ def calculate_response(factors: Dict[str, float], model: DOEModel) -> float:
         response += peak1 + peak2
 
     else:  # regression
-        # Regression-style second-order model with interactions.
+        # Two-factor quadratic regression with one first-order interaction.
         response += (
-            model.b_aa * (a ** 2)
-            + model.b_bb * (b ** 2)
-            + model.b_cc * (c ** 2)
-            + model.b_dd * (d ** 2)
-            + model.b_ee * (e ** 2)
-            + model.b_ff * (f ** 2)
-            + model.b_gg * (g ** 2)
-            + model.b_ab * (sig1_val * sig2_val)
-            + model.b_aab * (sig1_val ** 2 * sig2_val)
-            + model.b_abb * (sig1_val * sig2_val ** 2)
+            - getattr(model, f"b_{sig1.lower()}{sig1.lower()}") * (sig1_val ** 2)
+            - getattr(model, f"b_{sig2.lower()}{sig2.lower()}") * (sig2_val ** 2)
+            - model.b_ab * (sig1_val * sig2_val)
         )
 
     if model.noise_std > 0:
@@ -242,23 +237,33 @@ def model_equation(model: DOEModel) -> str:
         return "Y = " + " ".join(terms)
     
     else:  # regression
-        # Main second-order terms
+        # Keep only tiny linear noise from non-significant factors in the displayed equation.
+        noise_terms = []
         for f in factors:
-            coef = getattr(model, f'b_{f.lower()}{f.lower()}')
+            if f in (sig1, sig2):
+                continue
+            coef = getattr(model, f'b_{f.lower()}')
             if abs(coef) > 0.0001:
-                terms.append(f"{coef:.5f}*{f}^2")
+                noise_terms.append(f"{coef:.4f}*{f}")
 
-        # First-order interaction
-        if abs(model.b_ab) > 0.0001:
-            terms.append(f"{model.b_ab:.5f}*{sig1}*{sig2}")
+        sig1_lin = getattr(model, f"b_{sig1.lower()}")
+        sig2_lin = getattr(model, f"b_{sig2.lower()}")
+        sig1_quad = getattr(model, f"b_{sig1.lower()}{sig1.lower()}")
+        sig2_quad = getattr(model, f"b_{sig2.lower()}{sig2.lower()}")
 
-        # Second-order interactions
-        if abs(model.b_aab) > 0.00001:
-            terms.append(f"{model.b_aab:.5f}*{sig1}^2*{sig2}")
-        if abs(model.b_abb) > 0.00001:
-            terms.append(f"{model.b_abb:.5f}*{sig1}*{sig2}^2")
-        
-        return "Y = " + " + ".join(terms)
+        eq = (
+            f"Y = {model.intercept:.3f} "
+            f"+ {sig1_lin:.4f}*{sig1} "
+            f"+ {sig2_lin:.4f}*{sig2} "
+            f"- {sig1_quad:.5f}*{sig1}^2 "
+            f"- {sig2_quad:.5f}*{sig2}^2 "
+            f"- {model.b_ab:.5f}*{sig1}*{sig2}"
+        )
+
+        if noise_terms:
+            eq += " + " + " + ".join(noise_terms)
+
+        return eq
 
 
 def compute_anova(factor_table: Dict[str, float], response: float) -> Dict[str, float]:

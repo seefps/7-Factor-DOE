@@ -78,6 +78,29 @@ def plot_response_surface(model, factors_fixed, grid_points=81):
     return fig
 
 
+def calculate_maximum_point(model, grid_points: int = 121):
+    """Grid-search the maximum response within the factor bounds [-50, 50]."""
+    sig1, sig2 = model.sig_factors
+    expected_factors = ["A", "B", "C", "D", "E", "F", "G"]
+
+    best_response = -np.inf
+    best_factors = {f: 0.0 for f in expected_factors}
+
+    grid = np.linspace(-50, 50, grid_points)
+    for x_val in grid:
+        for y_val in grid:
+            candidate = {f: 0.0 for f in expected_factors}
+            candidate[sig1] = float(x_val)
+            candidate[sig2] = float(y_val)
+
+            response = calculate_response(candidate, model)
+            if response > best_response:
+                best_response = float(response)
+                best_factors = candidate
+
+    return best_factors, best_response
+
+
 def main() -> None:
     st.set_page_config(page_title="7-Factor DOE Simulator", layout="wide")
     st.title("7-Factor DOE Simulator for Process Optimization")
@@ -195,13 +218,108 @@ def main() -> None:
 
     st.subheader("Effects Reference")
     st.write(
-        "Model includes seeded significant main effects for 2 factors plus first-order and second-order interactions."
+        "Regression mode uses two significant factors with linear, quadratic, and one first-order interaction term; other factors add only small linear noise."
     )
 
     st.subheader("Trial History")
     st.dataframe(st.session_state.history, use_container_width=True)
 
+    st.subheader("Compute Contour Graph")
+    st.write(
+        "Paste 3 columns: factor 1, factor 2, and response. "
+        "A contour map with 10 gradients will be generated from the pasted data."
+    )
+    contour_table = st.text_area(
+        "Paste contour data table",
+        value="D,F,Response\n-20,-20,120\n-20,0,140\n-20,20,130\n0,-20,160\n0,0,180\n0,20,170\n20,-20,150\n20,0,165\n20,20,155",
+        height=180,
+        key="pasted_contour_table",
+    )
+
+    if st.button("Compute Contour Graph"):
+        try:
+            contour_df = pd.read_csv(StringIO(contour_table.strip()), sep=None, engine="python")
+            if contour_df.shape[1] == 1:
+                contour_df = pd.read_csv(
+                    StringIO(contour_table.strip()),
+                    sep=r"[\s,;\t]+",
+                    engine="python",
+                )
+
+            if contour_df.shape[1] < 3:
+                st.error("Please paste at least 3 columns: factor1, factor2, response.")
+            else:
+                contour_df = contour_df.iloc[:, :3].copy()
+                x_name, y_name, z_name = contour_df.columns
+
+                contour_df[x_name] = pd.to_numeric(contour_df[x_name], errors="coerce")
+                contour_df[y_name] = pd.to_numeric(contour_df[y_name], errors="coerce")
+                contour_df[z_name] = pd.to_numeric(contour_df[z_name], errors="coerce")
+                contour_df = contour_df.dropna()
+
+                if len(contour_df) < 6:
+                    st.error("Need at least 6 valid rows to build a contour graph.")
+                else:
+                    bins = 25
+                    x_edges = np.linspace(contour_df[x_name].min(), contour_df[x_name].max(), bins)
+                    y_edges = np.linspace(contour_df[y_name].min(), contour_df[y_name].max(), bins)
+
+                    binned = contour_df.assign(
+                        x_bin=pd.cut(contour_df[x_name], bins=x_edges, include_lowest=True),
+                        y_bin=pd.cut(contour_df[y_name], bins=y_edges, include_lowest=True),
+                    )
+
+                    pivot = binned.groupby(["y_bin", "x_bin"], observed=False)[z_name].mean().unstack()
+                    z_grid_df = pivot.copy()
+                    z_grid_df = z_grid_df.interpolate(axis=0, limit_direction="both")
+                    z_grid_df = z_grid_df.interpolate(axis=1, limit_direction="both")
+                    z_grid_df = z_grid_df.fillna(z_grid_df.stack().mean())
+
+                    x_centers = [interval.mid for interval in z_grid_df.columns]
+                    y_centers = [interval.mid for interval in z_grid_df.index]
+                    z_grid = z_grid_df.to_numpy(dtype=float)
+
+                    contour_fig = go.Figure(
+                        data=go.Contour(
+                            x=x_centers,
+                            y=y_centers,
+                            z=z_grid,
+                            colorscale="Viridis",
+                            ncontours=10,
+                            contours=dict(coloring="heatmap", showlines=True),
+                            colorbar=dict(title=z_name),
+                        )
+                    )
+                    contour_fig.add_trace(
+                        go.Scatter(
+                            x=contour_df[x_name],
+                            y=contour_df[y_name],
+                            mode="markers",
+                            marker=dict(size=6, color="white", line=dict(color="black", width=1)),
+                            name="Pasted points",
+                        )
+                    )
+                    contour_fig.update_layout(
+                        title=f"Contour Map: {z_name} vs {x_name}/{y_name}",
+                        xaxis_title=x_name,
+                        yaxis_title=y_name,
+                        height=550,
+                    )
+                    st.plotly_chart(contour_fig, use_container_width=True)
+                    st.success(f"Contour graph generated from {len(contour_df)} rows.")
+        except Exception as exc:
+            st.error(f"Could not parse contour table. Check format and delimiters. Error: {exc}")
+
     if st.session_state.show_answer:
+        max_factors, max_response = calculate_maximum_point(st.session_state.model)
+        sig1, sig2 = st.session_state.model.sig_factors
+
+        st.subheader("Calculated Maximum Point")
+        st.write(
+            f"Best predicted settings in bounds: {sig1} = {max_factors[sig1]:.2f}, "
+            f"{sig2} = {max_factors[sig2]:.2f}, Response = {max_response:.4f}"
+        )
+
         st.subheader("Response Surface Plot")
         show_plot = st.checkbox("Show response surface plot", value=st.session_state.show_plot)
         st.session_state.show_plot = show_plot
