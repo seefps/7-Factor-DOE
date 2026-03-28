@@ -26,7 +26,7 @@ streamlit run app.py
 
 4. ***Don't click until you want to see the answer!***  
 5. Run Trials by inputing factors and Clicking `Run Trial`
-6. Import a batch of trial settings as CSV or Paste Table and Clicking `Comupte Responses from Pasted Table`
+6. Import a batch of trial settings as CSV or Paste Table and click `Comupte Responses from Pasted Table`
 7. Results are displayed in the Trial History. Click `Clear saved trials` in the sidebar to reset history.
 
 
